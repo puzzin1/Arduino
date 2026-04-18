@@ -363,26 +363,23 @@ void drawWorking() {
   display.clear();
 
   float hi = baseTemp + alarmHighDelta;
-  float lo = baseTemp - ALARM_LOW_DELTA;
 
   // ── Текущая температура — максимально крупно ──
   display.setFont(ArialMT_Plain_24);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
-  display.drawString(64, 2, String(temperature, 1) + " C");
+  display.drawString(64, 0, String(temperature, 1) + " C");
 
-  display.drawHorizontalLine(0, 29, 128);
+  // ── Порог срабатывания — средний шрифт ──
+  display.setFont(ArialMT_Plain_16);
+  display.drawString(64, 27, "Hi +" + String(alarmHighDelta, 1)
+                     + " (" + String(hi, 1) + ")");
 
-  // ── Пороги и база — мелким шрифтом ──
+  display.drawHorizontalLine(0, 47, 128);
+
+  // ── Статус ──
   display.setFont(ArialMT_Plain_10);
-  display.setTextAlignment(TEXT_ALIGN_LEFT);
-  display.drawString(0, 31, "Base: " + String(baseTemp, 1) + " C");
-  display.drawString(0, 41, "Hi:  +" + String(alarmHighDelta, 1)
-                     + "  (" + String(hi, 1) + " C)");
-  display.drawString(0, 51, "Low: -0.3  (" + String(lo, 1) + " C)");
-
-  // ── Статус тревоги справа ──
-  display.setTextAlignment(TEXT_ALIGN_RIGHT);
-  display.drawString(128, 41, alarmActive ? "!!" : "OK");
+  display.setTextAlignment(TEXT_ALIGN_CENTER);
+  display.drawString(64, 51, alarmActive ? "!! ТРЕВОГА !!" : "НОРМА");
 
   display.display();
 }
