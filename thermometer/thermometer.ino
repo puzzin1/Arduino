@@ -273,6 +273,8 @@ void updateAlarm() {
   float hi = baseTemp + alarmHighDelta;
   float lo = baseTemp - ALARM_LOW_DELTA;
   alarmActive = (temperature >= hi || temperature <= lo);
+  Serial.printf("Base:%.1f +Delta:%.1f =Hi:%.1f  T:%.1f  Alarm:%d\n",
+                baseTemp, alarmHighDelta, hi, temperature, alarmActive);
 }
 
 // ════════════════════════════════════════════════════════════
