@@ -311,6 +311,7 @@ void shortPress() {
     alarmHighDelta = ALARM_HIGH_DEFAULT;
     firstPress     = true;
     state          = WORKING;
+    updateAlarm();  // сразу проверить тревогу
     beepDouble();
     Serial.printf("Принудительный выход. База: %.1f C  Hi: +%.1f\n",
                   baseTemp, alarmHighDelta);
@@ -324,6 +325,7 @@ void shortPress() {
     } else {
       alarmHighDelta = roundTo1(alarmHighDelta + ALARM_HIGH_STEP);
     }
+    updateAlarm();  // сразу проверить тревогу при изменении порога
     Serial.printf("Hi: +%.1f C\n", alarmHighDelta);
 
   } else if (state == CALIBRATING) {
