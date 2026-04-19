@@ -226,10 +226,10 @@ void loop() {
       }
 
       if (now - stabStartMs >= STAB_WINDOW_MS) {
-        baseTemp      = roundTo1((stabMinTemp + stabMaxTemp) / 2.0f);
+        baseTemp       = temperature;         // текущая температура, а не среднее за окно
         alarmHighDelta = ALARM_HIGH_DEFAULT;
-        firstPress    = true;
-        state         = WORKING;
+        firstPress     = true;
+        state          = WORKING;
         beepDouble();
         Serial.printf("База: %.1f C  Hi: +%.1f\n", baseTemp, alarmHighDelta);
       }
@@ -305,7 +305,17 @@ void checkButton() {
 void shortPress() {
   beepShort(1500, 60);
 
-  if (state == WORKING) {
+  if (state == STABILIZING) {
+    // Принудительный выход в рабочий режим с ТЕКУЩЕЙ температурой
+    baseTemp       = temperature;
+    alarmHighDelta = ALARM_HIGH_DEFAULT;
+    firstPress     = true;
+    state          = WORKING;
+    beepDouble();
+    Serial.printf("Принудительный выход. База: %.1f C  Hi: +%.1f\n",
+                  baseTemp, alarmHighDelta);
+
+  } else if (state == WORKING) {
     if (firstPress) {
       alarmHighDelta = ALARM_HIGH_START;   // первое нажатие → 0.2
       firstPress = false;
