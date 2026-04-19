@@ -9,6 +9,9 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <EEPROM.h>
+#include "esp_wifi.h"
+#include "esp_bt.h"
+#include "esp_sleep.h"
 
 // ──── Пины ────────────────────────────────────────────────
 #define OLED_SDA     5
@@ -25,7 +28,7 @@
 #define STAB_WINDOW_MS   (3UL * 60UL * 1000UL)  // 3 минуты стабилизации
 #define STAB_TOLERANCE   0.1f    // допуск стабилизации ±0.1°C
 #define ALARM_LOW_DELTA  0.3f    // нижний порог (базовая − 0.3°C), фиксированный
-#define ALARM_HIGH_DEFAULT 0.3f  // порог сразу после фиксации базы
+#define ALARM_HIGH_DEFAULT 0.3f  // порог при входе в рабочий режим
 #define ALARM_HIGH_START   0.2f  // порог после первого нажатия кнопки
 #define ALARM_HIGH_MAX     1.0f  // максимальный верхний порог
 #define ALARM_HIGH_STEP    0.1f  // шаг регулировки верхнего порога
@@ -94,6 +97,15 @@ float roundTo1(float v);
 // ════════════════════════════════════════════════════════════
 void setup() {
   Serial.begin(115200);
+
+  // ── Энергосбережение ──────────────────────────────────────
+  setCpuFrequencyMhz(80);          // 80 МГц вместо 240 — экономия ~30%
+  esp_wifi_stop();                 // Wi-Fi выключен полностью
+  esp_bt_controller_disable();    // Bluetooth выключен полностью
+  // Кнопка GPIO0 будет будить из light sleep
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)BOOT_BTN, 0);
+  // Таймер для пробуждения по расписанию (каждые ~50 мс)
+  esp_sleep_enable_timer_wakeup(50000);  // 50 000 мкс = 50 мс
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(BOOT_BTN, INPUT_PULLUP);
   noTone(BUZZER_PIN);
@@ -153,7 +165,7 @@ void loop() {
       if (now - stabStartMs >= STAB_WINDOW_MS) {
         // Берём среднее между min и max за период
         baseTemp       = roundTo1((stabMinTemp + stabMaxTemp) / 2.0f);
-        alarmHighDelta = ALARM_HIGH_DEFAULT;  // сразу +0.3°C
+        alarmHighDelta = ALARM_HIGH_DEFAULT;  // +0.3 — контроль сразу активен
         state = WORKING;
         beepShort(2000, 150);
         delay(200);
@@ -182,7 +194,8 @@ void loop() {
     case CALIBRATING:  drawCalibrating(); break;
   }
 
-  delay(50);
+  // Light sleep вместо delay(50) — CPU остановлен, GPIO и таймер активны
+  esp_light_sleep_start();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -244,9 +257,9 @@ void shortPress() {
   beepShort(1500, 60);
 
   if (state == WORKING) {
-    // Первое нажатие сбрасывает до +0.2, далее +0.1 по кругу до +1.0
-    if (alarmHighDelta >= ALARM_HIGH_MAX - 0.001f) {
-      alarmHighDelta = ALARM_HIGH_START;   // по кругу: 1.0 → 0.2
+    // Первое нажатие — всегда сброс на 0.2, далее +0.1 по кругу до 1.0
+    if (alarmHighDelta <= ALARM_HIGH_START + 0.001f || alarmHighDelta >= ALARM_HIGH_MAX - 0.001f) {
+      alarmHighDelta = ALARM_HIGH_START;        // сброс на 0.2 (и wrap 1.0→0.2)
     } else {
       alarmHighDelta = roundTo1(alarmHighDelta + ALARM_HIGH_STEP);
     }
@@ -362,8 +375,6 @@ void drawStabilizing() {
 void drawWorking() {
   display.clear();
 
-  float hi = baseTemp + alarmHighDelta;
-
   // ── Текущая температура — максимально крупно ──
   display.setFont(ArialMT_Plain_24);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
@@ -371,6 +382,7 @@ void drawWorking() {
 
   // ── Порог срабатывания — средний шрифт ──
   display.setFont(ArialMT_Plain_16);
+  float hi = baseTemp + alarmHighDelta;
   display.drawString(64, 27, "Hi +" + String(alarmHighDelta, 1)
                      + " (" + String(hi, 1) + ")");
 
