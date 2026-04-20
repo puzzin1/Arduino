@@ -15,6 +15,8 @@
 #include "esp_sleep.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 #include "arduino_secrets.h"
 
 // ╔══════════════════════════════════════════════════════════╗
@@ -165,6 +167,7 @@ void publishTemperature();
 
 // ════════════════════════════════════════════════════════════
 void setup() {
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  // отключить brownout detector
   Serial.begin(115200);
 
   setCpuFrequencyMhz(CPU_FREQ_MHZ);
@@ -298,6 +301,7 @@ void loop() {
 void enableWifi() {
   if (wifiActive) return;
   WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_11dBm);
   WiFi.disconnect();
   delay(100);
   wifiActive = true;
