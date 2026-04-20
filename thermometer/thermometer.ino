@@ -355,7 +355,7 @@ bool connectMqtt() {
 
   unsigned long t = millis();
   while (!mqttClient.connected() && millis() - t < MQTT_CONNECT_TIMEOUT_MS) {
-    mqttClient.connect(MQTT_CLIENT_ID);
+    mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS);
     delay(300);
   }
 
