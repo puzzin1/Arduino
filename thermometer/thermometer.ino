@@ -253,6 +253,12 @@ void loop() {
 
       if (shouldPublish) {
         publishOnNextRead = false;
+        display.clear();
+        display.setFont(ArialMT_Plain_10);
+        display.setTextAlignment(TEXT_ALIGN_CENTER);
+        display.drawString(64, 20, "Отправка данных...");
+        display.drawString(64, 35, "Подождите");
+        display.display();
         if (tryConnect()) {
           netAvailable = true;
           publishTemperature();
