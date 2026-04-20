@@ -190,8 +190,8 @@ void setup() {
   display.clear();
   display.setTextAlignment(TEXT_ALIGN_CENTER);
   display.setFont(ArialMT_Plain_10);
-  display.drawString(64, 24, "Термометр ESP32");
-  display.drawString(64, 36, "Инициализация...");
+  display.drawString(64, 24, "Thermometer ESP32");
+  display.drawString(64, 36, "Initializing...");
   display.display();
 
   sensors.begin();
@@ -409,13 +409,13 @@ void initNetwork() {
   display.clear();
   display.setFont(ArialMT_Plain_10);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
-  display.drawString(64, 0, "Проверка WiFi...");
+  display.drawString(64, 0, "WiFi check...");
   display.display();
 
   if (tryConnect()) {
     netAvailable = true;
     display.clear();
-    display.drawString(64, 20, "Сеть OK");
+    display.drawString(64, 20, "Network OK");
     display.drawString(64, 35, connectedSSID);
     display.display();
     Serial.printf("Сеть OK: %s -> %s:%d\n", connectedSSID.c_str(), MQTT_HOST, MQTT_PORT);
@@ -423,8 +423,8 @@ void initNetwork() {
   } else {
     netAvailable = false;
     display.clear();
-    display.drawString(64, 10, "Сеть недоступна");
-    display.drawString(64, 30, "Автономный режим");
+    display.drawString(64, 10, "No network");
+    display.drawString(64, 30, "Standalone mode");
     display.display();
     Serial.println("Автономный режим");
   }
@@ -620,7 +620,7 @@ void drawStabilizing() {
   display.clear();
   display.setFont(ArialMT_Plain_10);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
-  display.drawString(64, 0, "Стабилизация...");
+  display.drawString(64, 0, "Stabilizing...");
   display.drawHorizontalLine(0, 11, 128);
 
   display.setFont(ArialMT_Plain_24);
@@ -634,7 +634,7 @@ void drawStabilizing() {
   if (secsLeft < 0) secsLeft = 0;
 
   display.setFont(ArialMT_Plain_10);
-  display.drawString(64, 39, "Осталось: " + String(secsLeft) + " сек");
+  display.drawString(64, 39, "Left: " + String(secsLeft) + " sec");
 
   int progress = (int)((elapsed * 100UL) / STAB_WINDOW_MS);
   if (progress > 100) progress = 100;
@@ -659,7 +659,7 @@ void drawWorking() {
 
   display.setFont(ArialMT_Plain_10);
   display.setTextAlignment(TEXT_ALIGN_LEFT);
-  display.drawString(0, 51, alarmActive ? "!! ТРЕВОГА !!" : "НОРМА");
+  display.drawString(0, 51, alarmActive ? "!! ALARM !!" : "OK");
 
   display.setTextAlignment(TEXT_ALIGN_RIGHT);
   if (wifiActive) {
@@ -675,7 +675,7 @@ void drawCalibrating() {
   display.clear();
   display.setFont(ArialMT_Plain_10);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
-  display.drawString(64, 0, "[ КАЛИБРОВКА ]");
+  display.drawString(64, 0, "[ CALIBRATION ]");
   display.drawHorizontalLine(0, 11, 128);
 
   display.setFont(ArialMT_Plain_24);
@@ -683,12 +683,12 @@ void drawCalibrating() {
   display.drawString(64, 13, calStr);
 
   display.setFont(ArialMT_Plain_10);
-  display.drawString(64, 39, "Датчик: " + String(rawTemp, 1) + " C");
-  display.drawString(64, 49, "Итого:  " + String(temperature, 1) + " C");
+  display.drawString(64, 39, "Sensor: " + String(rawTemp, 1) + " C");
+  display.drawString(64, 49, "Total:  " + String(temperature, 1) + " C");
 
   display.drawHorizontalLine(0, 59, 128);
   display.setTextAlignment(TEXT_ALIGN_LEFT);
-  display.drawString(0, 60, "Btn:+0.1  Hold:выход");
+  display.drawString(0, 60, "Btn:+0.1  Hold:exit");
 
   display.display();
 }
