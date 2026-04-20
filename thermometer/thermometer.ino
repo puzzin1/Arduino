@@ -256,8 +256,8 @@ void loop() {
         display.clear();
         display.setFont(ArialMT_Plain_10);
         display.setTextAlignment(TEXT_ALIGN_CENTER);
-        display.drawString(64, 20, "Отправка данных...");
-        display.drawString(64, 35, "Подождите");
+        display.drawString(64, 20, "Sending data...");
+        display.drawString(64, 35, "Please wait");
         display.display();
         if (tryConnect()) {
           netAvailable = true;
