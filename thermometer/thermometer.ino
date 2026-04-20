@@ -2,6 +2,8 @@
 //  Термометр-сигнализатор на ESP32 (Wemos TTGO ESP-WROOM-32)
 //  Датчик DS18B20 на GPIO27, зуммер на GPIO25, кнопка Boot GPIO0
 //  OLED 0.96" SSD1306: SDA=GPIO5, SCL=GPIO4
+//  MQTT: 192.168.100.119:1883 (без авторизации)
+//  WiFi: Keenetic-1693 (приоритет) / Keenetic-115 (резерв)
 // ============================================================
 
 #include <Wire.h>
@@ -10,127 +12,114 @@
 #include <DallasTemperature.h>
 #include <EEPROM.h>
 #include "esp_wifi.h"
-#include "esp_bt.h"
 #include "esp_sleep.h"
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include "arduino_secrets.h"
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║                    ПИНЫ                                  ║
 // ╚══════════════════════════════════════════════════════════╝
 
-#define OLED_SDA     5    // I2C SDA дисплея SSD1306
-#define OLED_SCL     4    // I2C SCL дисплея SSD1306
-#define DS18B20_PIN  27   // шина данных датчика температуры DS18B20
-#define BUZZER_PIN   25   // пассивный зуммер (сигнал через tone())
-#define BOOT_BTN     0    // встроенная кнопка Boot (активный LOW)
+#define OLED_SDA     5
+#define OLED_SCL     4
+#define DS18B20_PIN  27
+#define BUZZER_PIN   25
+#define BOOT_BTN     0
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║                    MQTT-топики                           ║
+// ╚══════════════════════════════════════════════════════════╝
+
+#define MQTT_TOPIC_TEMP    "thermometer/temperature"
+#define MQTT_TOPIC_STATUS  "thermometer/status"
+#define MQTT_TOPIC_BASE    "thermometer/base"
+
+#define WIFI_CONNECT_TIMEOUT_MS   8000UL
+#define MQTT_CONNECT_TIMEOUT_MS   4000UL
+#define WIFI_RETRY_INTERVAL_MS    60000UL
+#define MQTT_PUBLISH_INTERVAL_MS  (60UL * 60UL * 1000UL)
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║                    КНОПКА                                ║
 // ╚══════════════════════════════════════════════════════════╝
 
-#define DEBOUNCE_MS   50   // антидребезг: пауза после фронта (мс)
-#define LONG_PRESS_MS 800  // порог длинного нажатия (мс)
+#define DEBOUNCE_MS   50
+#define LONG_PRESS_MS 800
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║                    ДАТЧИК                                ║
 // ╚══════════════════════════════════════════════════════════╝
 
-// Интервал между опросами датчика (мс).
-// DS18B20 при разрешении 12 бит тратит ~750 мс на конвертацию,
-// поэтому минимально разумный интервал — 1000 мс.
-// Увеличение снижает потребление и износ датчика.
-#define READ_INTERVAL_MS  5000UL   // опрос раз в 5 секунд
-
-// Разрешение датчика DS18B20: 9, 10, 11 или 12 бит.
-// 12 бит — шаг 0.0625°C, время конвертации ~750 мс.
-// 9 бит  — шаг 0.5°C,    время конвертации ~94 мс.
+#define READ_INTERVAL_MS  5000UL
 #define DS18B20_RESOLUTION  12
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║                    СТАБИЛИЗАЦИЯ                          ║
 // ╚══════════════════════════════════════════════════════════╝
 
-// Сколько миллисекунд температура должна удерживаться
-// в пределах ±STAB_TOLERANCE, чтобы зафиксировать базу.
-#define STAB_WINDOW_MS  (3UL * 60UL * 1000UL)  // 3 минуты
-
-// Допустимый разброс температуры в течение окна стабилизации.
-// Если max−min за период превысит STAB_TOLERANCE*2 — сброс таймера.
-#define STAB_TOLERANCE  0.1f   // ±0.1°C
+#define STAB_WINDOW_MS  (3UL * 60UL * 1000UL)
+#define STAB_TOLERANCE  0.1f
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║                    ПОРОГИ ТРЕВОГИ                        ║
 // ╚══════════════════════════════════════════════════════════╝
 
-// Нижний порог — фиксированный, всегда Base − ALARM_LOW_DELTA.
-#define ALARM_LOW_DELTA     0.3f   // °C ниже базы → тревога
-
-// Верхний порог при первом входе в рабочий режим (до нажатия кнопки).
-// Кнопка позволяет изменить его от ALARM_HIGH_START до ALARM_HIGH_MAX.
-#define ALARM_HIGH_DEFAULT  0.3f   // начальная дельта при старте рабочего режима
-
-// Значение, на которое сбрасывается верхний порог первым нажатием кнопки,
-// а также минимум в круговой регулировке.
-#define ALARM_HIGH_START    0.2f   // °C — минимум в регулировке
-
-// Максимальный верхний порог. После достижения — wrap на ALARM_HIGH_START.
-#define ALARM_HIGH_MAX      1.0f   // °C — максимум в регулировке
-
-// Шаг изменения верхнего порога при каждом нажатии кнопки.
-#define ALARM_HIGH_STEP     0.1f   // °C за нажатие
-
-// Интервал между повторными сигналами тревоги (мс).
-#define BEEP_ALARM_INTERVAL_MS  3000UL  // 3 сек
+#define ALARM_LOW_DELTA     0.3f
+#define ALARM_HIGH_DEFAULT  0.3f
+#define ALARM_HIGH_START    0.2f
+#define ALARM_HIGH_MAX      1.0f
+#define ALARM_HIGH_STEP     0.1f
+#define BEEP_ALARM_INTERVAL_MS  3000UL
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║                    КАЛИБРОВКА                            ║
 // ╚══════════════════════════════════════════════════════════╝
 
-// Диапазон и шаг калибровочной поправки.
-// T_итого = T_датчик + поправка
-#define CAL_MIN   -4.0f   // минимальная поправка (°C)
-#define CAL_MAX    4.0f   // максимальная поправка (°C)
-#define CAL_STEP   0.1f   // шаг изменения поправки (°C)
+#define CAL_MIN   -4.0f
+#define CAL_MAX    4.0f
+#define CAL_STEP   0.1f
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║                    EEPROM                                ║
 // ╚══════════════════════════════════════════════════════════╝
 
-#define EEPROM_SIZE       8     // байт резервируем под наши данные
-#define EEPROM_ADDR_CAL   0     // адрес float (4 байта) — калибровочная поправка
-#define EEPROM_ADDR_MAGIC 4     // адрес uint8_t — маркер валидности данных
-#define EEPROM_MAGIC      0xAB  // сигнатура: если совпадает — данные валидны
+#define EEPROM_SIZE       8
+#define EEPROM_ADDR_CAL   0
+#define EEPROM_ADDR_MAGIC 4
+#define EEPROM_MAGIC      0xAB
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║                    ЭНЕРГОСБЕРЕЖЕНИЕ                      ║
 // ╚══════════════════════════════════════════════════════════╝
 
-// Частота CPU. 240 МГц — максимум, 80 МГц — достаточно для этой задачи,
-// потребление процессорного ядра снижается примерно втрое.
 #define CPU_FREQ_MHZ  80
-
-// Период пробуждения из light sleep (мкс). В sleep CPU остановлен,
-// ОЗУ и периферия живы. Пробуждение — по таймеру или по нажатию кнопки.
-// 50 000 мкс = 50 мс → loop вызывается ~20 раз/сек (достаточно для отзывчивости).
-#define SLEEP_US  50000UL
+#define SLEEP_US      50000UL
 
 // ════════════════════════════════════════════════════════════
-//  Внутренние константы (не требуют настройки)
-// ════════════════════════════════════════════════════════════
+
 enum AppState { STABILIZING, WORKING, CALIBRATING };
 
 SSD1306Wire display(0x3C, OLED_SDA, OLED_SCL);
 OneWire oneWire(DS18B20_PIN);
 DallasTemperature sensors(&oneWire);
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
 
 AppState state        = STABILIZING;
 
-float rawTemp         = 0.0f;  // сырое значение датчика (°C)
-float calOffset       = 0.0f;  // поправка из EEPROM (°C)
-float temperature     = 0.0f;  // скорректированная температура, округлённая до 0.1°C
+bool  netAvailable   = false;
+bool  wifiActive     = false;
+unsigned long lastWifiFailMs = 0;
+bool  prevAlarm      = false;
 
-float baseTemp        = 0.0f;  // зафиксированная база (°C)
-float alarmHighDelta  = 0.0f;  // текущий верхний порог от базы (°C)
-bool  firstPress      = true;  // true — следующее нажатие сбрасывает дельту на 0.2
+float rawTemp         = 0.0f;
+float calOffset       = 0.0f;
+float temperature     = 0.0f;
+
+float baseTemp        = 0.0f;
+float alarmHighDelta  = 0.0f;
+bool  firstPress      = true;
 
 float stabMinTemp     = 0.0f;
 float stabMaxTemp     = 0.0f;
@@ -144,6 +133,11 @@ unsigned long lastBeepMs  = 0;
 bool btnLastState     = HIGH;
 unsigned long btnPressMs  = 0;
 bool btnLongFired     = false;
+
+unsigned long lastMqttPublishMs = 0;
+bool publishOnNextRead = false;
+
+String connectedSSID = "";
 
 // ──── Прототипы ───────────────────────────────────────────
 void loadCalibration();
@@ -161,16 +155,24 @@ void beepDouble(int freq = 2000, int dur = 150);
 void beepAlarm();
 float roundTo1(float v);
 
+void enableWifi();
+void disableWifi();
+bool connectWifi();
+bool connectMqtt();
+bool tryConnect();
+void initNetwork();
+void publishTemperature();
+
 // ════════════════════════════════════════════════════════════
 void setup() {
   Serial.begin(115200);
 
-  // Энергосбережение
   setCpuFrequencyMhz(CPU_FREQ_MHZ);
-  esp_wifi_stop();
-  esp_bt_controller_disable();
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)BOOT_BTN, 0);  // кнопка будит из sleep
+
+  // Light sleep: таймер + кнопка
   esp_sleep_enable_timer_wakeup(SLEEP_US);
+  gpio_wakeup_enable((gpio_num_t)BOOT_BTN, GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
 
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(BOOT_BTN, INPUT_PULLUP);
@@ -195,13 +197,16 @@ void setup() {
   beepShort(1000, 200);
   delay(500);
 
-  // Первый замер — точка отсчёта стабилизации
+  // Первый замер
   sensors.requestTemperatures();
   rawTemp     = sensors.getTempCByIndex(0);
   temperature = roundTo1(rawTemp + calOffset);
   stabMinTemp = temperature;
   stabMaxTemp = temperature;
   stabStartMs = millis();
+
+  // Проверка сети при старте
+  initNetwork();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -226,16 +231,40 @@ void loop() {
       }
 
       if (now - stabStartMs >= STAB_WINDOW_MS) {
-        baseTemp       = temperature;         // текущая температура, а не среднее за окно
+        baseTemp       = temperature;
         alarmHighDelta = ALARM_HIGH_DEFAULT;
         firstPress     = true;
         state          = WORKING;
         beepDouble();
         Serial.printf("База: %.1f C  Hi: +%.1f\n", baseTemp, alarmHighDelta);
+        publishOnNextRead = true;
       }
 
     } else if (state == WORKING) {
+      bool wasAlarm = prevAlarm;
       updateAlarm();
+      bool alarmJustCleared = wasAlarm && !alarmActive;
+
+      bool shouldPublish = publishOnNextRead || alarmActive || alarmJustCleared ||
+                           (now - lastMqttPublishMs >= MQTT_PUBLISH_INTERVAL_MS);
+
+      if (shouldPublish) {
+        publishOnNextRead = false;
+        if (tryConnect()) {
+          netAvailable = true;
+          publishTemperature();
+          lastMqttPublishMs = now;
+        } else {
+          netAvailable = false;
+        }
+      }
+
+      // WiFi выкл. когда тревога не активна
+      if (!alarmActive && wifiActive) {
+        disableWifi();
+      }
+
+      prevAlarm = alarmActive;
     }
   }
 
@@ -253,10 +282,167 @@ void loop() {
     case CALIBRATING:  drawCalibrating(); break;
   }
 
-  esp_light_sleep_start();
+  // Light sleep только когда WiFi выключен
+  if (wifiActive) {
+    if (mqttClient.connected()) mqttClient.loop();
+    delay(100);
+  } else {
+    esp_light_sleep_start();
+  }
 }
 
 // ════════════════════════════════════════════════════════════
+//  СЕТЬ
+// ════════════════════════════════════════════════════════════
+
+void enableWifi() {
+  if (wifiActive) return;
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  wifiActive = true;
+  Serial.println("WiFi ON");
+}
+
+void disableWifi() {
+  if (!wifiActive) return;
+  if (mqttClient.connected()) mqttClient.disconnect();
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  esp_wifi_stop();
+  wifiActive = false;
+  Serial.println("WiFi OFF");
+}
+
+bool connectWifi() {
+  Serial.printf("WiFi: пробуем %s\n", WIFI_SSID1);
+  WiFi.begin(WIFI_SSID1, WIFI_PASS1);
+
+  unsigned long t = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t < WIFI_CONNECT_TIMEOUT_MS) {
+    delay(200);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    connectedSSID = WIFI_SSID1;
+    Serial.printf("WiFi OK: %s\n", connectedSSID.c_str());
+    return true;
+  }
+
+  Serial.printf("WiFi: %s не найдена, пробуем %s\n", WIFI_SSID1, WIFI_SSID2);
+  WiFi.disconnect();
+  delay(200);
+  WiFi.begin(WIFI_SSID2, WIFI_PASS2);
+
+  t = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t < WIFI_CONNECT_TIMEOUT_MS) {
+    delay(200);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    connectedSSID = WIFI_SSID2;
+    Serial.printf("WiFi OK: %s\n", connectedSSID.c_str());
+    return true;
+  }
+
+  Serial.println("WiFi: обе сети недоступны");
+  return false;
+}
+
+bool connectMqtt() {
+  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  mqttClient.setKeepAlive(60);
+
+  unsigned long t = millis();
+  while (!mqttClient.connected() && millis() - t < MQTT_CONNECT_TIMEOUT_MS) {
+    mqttClient.connect(MQTT_CLIENT_ID);
+    delay(300);
+  }
+
+  if (mqttClient.connected()) {
+    Serial.println("MQTT OK");
+    return true;
+  }
+  Serial.println("MQTT: не удалось подключиться");
+  return false;
+}
+
+bool tryConnect() {
+  if (wifiActive && WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
+    return true;
+  }
+
+  // Ограничение частоты повторных попыток
+  if (lastWifiFailMs > 0 && millis() - lastWifiFailMs < WIFI_RETRY_INTERVAL_MS) {
+    return false;
+  }
+
+  enableWifi();
+
+  if (!connectWifi()) {
+    disableWifi();
+    lastWifiFailMs = millis();
+    return false;
+  }
+
+  if (!connectMqtt()) {
+    disableWifi();
+    lastWifiFailMs = millis();
+    return false;
+  }
+
+  lastWifiFailMs = 0;
+  return true;
+}
+
+void initNetwork() {
+  display.clear();
+  display.setFont(ArialMT_Plain_10);
+  display.setTextAlignment(TEXT_ALIGN_CENTER);
+  display.drawString(64, 0, "Проверка WiFi...");
+  display.display();
+
+  if (tryConnect()) {
+    netAvailable = true;
+    display.clear();
+    display.drawString(64, 20, "Сеть OK");
+    display.drawString(64, 35, connectedSSID);
+    display.display();
+    Serial.printf("Сеть OK: %s -> %s:%d\n", connectedSSID.c_str(), MQTT_HOST, MQTT_PORT);
+    disableWifi();
+  } else {
+    netAvailable = false;
+    display.clear();
+    display.drawString(64, 10, "Сеть недоступна");
+    display.drawString(64, 30, "Автономный режим");
+    display.display();
+    Serial.println("Автономный режим");
+  }
+  delay(2000);
+}
+
+void publishTemperature() {
+  if (!mqttClient.connected()) return;
+
+  char buf[16];
+
+  dtostrf(temperature, 4, 1, buf);
+  mqttClient.publish(MQTT_TOPIC_TEMP, buf, true);
+
+  mqttClient.publish(MQTT_TOPIC_STATUS, alarmActive ? "ALARM" : "OK", true);
+
+  if (state == WORKING) {
+    dtostrf(baseTemp, 4, 1, buf);
+    mqttClient.publish(MQTT_TOPIC_BASE, buf, true);
+  }
+
+  Serial.printf("MQTT: T=%.1f  %s\n", temperature, alarmActive ? "ALARM" : "OK");
+}
+
+// ════════════════════════════════════════════════════════════
+//  ДАТЧИК
+// ════════════════════════════════════════════════════════════
+
 void readTemperature() {
   sensors.requestTemperatures();
   float raw = sensors.getTempCByIndex(0);
@@ -278,6 +464,9 @@ void updateAlarm() {
 }
 
 // ════════════════════════════════════════════════════════════
+//  КНОПКА
+// ════════════════════════════════════════════════════════════
+
 void checkButton() {
   bool reading = digitalRead(BOOT_BTN);
   unsigned long now = millis();
@@ -308,26 +497,26 @@ void shortPress() {
   beepShort(1500, 60);
 
   if (state == STABILIZING) {
-    // Принудительный выход в рабочий режим с ТЕКУЩЕЙ температурой
     baseTemp       = temperature;
     alarmHighDelta = ALARM_HIGH_DEFAULT;
     firstPress     = true;
     state          = WORKING;
-    updateAlarm();  // сразу проверить тревогу
+    updateAlarm();
     beepDouble();
+    publishOnNextRead = true;
     Serial.printf("Принудительный выход. База: %.1f C  Hi: +%.1f\n",
                   baseTemp, alarmHighDelta);
 
   } else if (state == WORKING) {
     if (firstPress) {
-      alarmHighDelta = ALARM_HIGH_START;   // первое нажатие → 0.2
+      alarmHighDelta = ALARM_HIGH_START;
       firstPress = false;
     } else if (alarmHighDelta >= ALARM_HIGH_MAX - 0.001f) {
-      alarmHighDelta = ALARM_HIGH_START;   // wrap: 1.0 → 0.2
+      alarmHighDelta = ALARM_HIGH_START;
     } else {
       alarmHighDelta = roundTo1(alarmHighDelta + ALARM_HIGH_STEP);
     }
-    updateAlarm();  // сразу проверить тревогу при изменении порога
+    updateAlarm();
     Serial.printf("Hi: +%.1f C\n", alarmHighDelta);
 
   } else if (state == CALIBRATING) {
@@ -343,6 +532,8 @@ void longPress() {
   beepShort(800, 200);
 
   if (state == WORKING || state == STABILIZING) {
+    disableWifi();
+    prevAlarm = false;
     state = CALIBRATING;
     Serial.println("-> Калибровка");
   } else if (state == CALIBRATING) {
@@ -356,6 +547,9 @@ void longPress() {
 }
 
 // ════════════════════════════════════════════════════════════
+//  EEPROM
+// ════════════════════════════════════════════════════════════
+
 void loadCalibration() {
   uint8_t magic = EEPROM.read(EEPROM_ADDR_MAGIC);
   if (magic == EEPROM_MAGIC) {
@@ -376,8 +570,9 @@ void saveCalibration() {
 }
 
 // ════════════════════════════════════════════════════════════
-// Зуммер — все функции блокирующие: звук гарантированно завершается
-// перед возвратом управления.
+//  ЗУММЕР
+// ════════════════════════════════════════════════════════════
+
 void beepShort(int freq, int dur) {
   tone(BUZZER_PIN, freq, dur);
   delay(dur + 10);
@@ -400,12 +595,16 @@ void beepAlarm() {
 }
 
 // ════════════════════════════════════════════════════════════
+//  УТИЛИТЫ
+// ════════════════════════════════════════════════════════════
+
 float roundTo1(float v) {
   return roundf(v * 10.0f) / 10.0f;
 }
 
 // ════════════════════════════════════════════════════════════
-// ЭКРАНЫ
+//  ЭКРАНЫ
+// ════════════════════════════════════════════════════════════
 
 void drawStabilizing() {
   display.clear();
@@ -449,8 +648,15 @@ void drawWorking() {
   display.drawHorizontalLine(0, 47, 128);
 
   display.setFont(ArialMT_Plain_10);
-  display.setTextAlignment(TEXT_ALIGN_CENTER);
-  display.drawString(64, 51, alarmActive ? "!! ТРЕВОГА !!" : "НОРМА");
+  display.setTextAlignment(TEXT_ALIGN_LEFT);
+  display.drawString(0, 51, alarmActive ? "!! ТРЕВОГА !!" : "НОРМА");
+
+  display.setTextAlignment(TEXT_ALIGN_RIGHT);
+  if (wifiActive) {
+    display.drawString(128, 51, "WiFi");
+  } else if (!netAvailable) {
+    display.drawString(128, 51, "AUTO");
+  }
 
   display.display();
 }
