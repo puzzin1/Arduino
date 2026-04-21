@@ -437,13 +437,13 @@ void publishTemperature() {
   char buf[16];
 
   dtostrf(temperature, 4, 1, buf);
-  mqttClient.publish(MQTT_TOPIC_TEMP, buf, true);
+  mqttClient.publish(MQTT_TOPIC_TEMP, buf, false);
 
-  mqttClient.publish(MQTT_TOPIC_STATUS, alarmActive ? "ALARM" : "OK", true);
+  mqttClient.publish(MQTT_TOPIC_STATUS, alarmActive ? "ALARM" : "OK", false);
 
   if (state == WORKING) {
     dtostrf(baseTemp, 4, 1, buf);
-    mqttClient.publish(MQTT_TOPIC_BASE, buf, true);
+    mqttClient.publish(MQTT_TOPIC_BASE, buf, false);
   }
 
   Serial.printf("MQTT: T=%.1f  %s\n", temperature, alarmActive ? "ALARM" : "OK");
