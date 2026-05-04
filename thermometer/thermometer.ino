@@ -28,6 +28,7 @@
 #define DS18B20_PIN  27
 #define BUZZER_PIN   25
 #define BOOT_BTN     0
+#define RELAY_PIN    26   // Модуль реле (HIGH = включено, LOW = выключено)
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║                    MQTT-топики                           ║
@@ -156,6 +157,7 @@ void beepShort(int freq = 1500, int dur = 80);
 void beepDouble(int freq = 2000, int dur = 150);
 void beepAlarm();
 float roundTo1(float v);
+void updateRelay();
 
 void enableWifi();
 void disableWifi();
@@ -180,6 +182,9 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(BOOT_BTN, INPUT_PULLUP);
   noTone(BUZZER_PIN);
+
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);   // Реле выключено при старте (LOW = выкл)
 
   EEPROM.begin(EEPROM_SIZE);
   loadCalibration();
@@ -210,6 +215,9 @@ void setup() {
 
   // Проверка сети при старте
   initNetwork();
+
+  // Установить начальное состояние реле (стабилизация → включено)
+  updateRelay();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -238,6 +246,7 @@ void loop() {
         alarmHighDelta = ALARM_HIGH_DEFAULT;
         firstPress     = true;
         state          = WORKING;
+        updateRelay();
         beepDouble();
         Serial.printf("База: %.1f C  Hi: +%.1f\n", baseTemp, alarmHighDelta);
         publishOnNextRead = true;
@@ -247,6 +256,7 @@ void loop() {
       bool wasAlarm = prevAlarm;
       updateAlarm();
       bool alarmJustCleared = wasAlarm && !alarmActive;
+      updateRelay();
 
       bool shouldPublish = publishOnNextRead || alarmActive || alarmJustCleared ||
                            (now - lastMqttPublishMs >= MQTT_PUBLISH_INTERVAL_MS);
@@ -512,6 +522,7 @@ void shortPress() {
     firstPress     = true;
     state          = WORKING;
     updateAlarm();
+    updateRelay();
     beepDouble();
     publishOnNextRead = true;
     Serial.printf("Принудительный выход. База: %.1f C  Hi: +%.1f\n",
@@ -545,6 +556,7 @@ void longPress() {
     disableWifi();
     prevAlarm = false;
     state = CALIBRATING;
+    updateRelay();
     Serial.println("-> Калибровка");
   } else if (state == CALIBRATING) {
     saveCalibration();
@@ -552,6 +564,7 @@ void longPress() {
     stabMaxTemp = temperature;
     stabStartMs = millis();
     state = STABILIZING;
+    updateRelay();
     Serial.println("-> Стабилизация");
   }
 }
@@ -577,6 +590,19 @@ void saveCalibration() {
   EEPROM.write(EEPROM_ADDR_MAGIC, EEPROM_MAGIC);
   EEPROM.commit();
   Serial.printf("EEPROM: сохранено %.1f C\n", calOffset);
+}
+
+// ════════════════════════════════════════════════════════════
+//  РЕЛЕ
+// ════════════════════════════════════════════════════════════
+
+// Реле включено (LOW) в режиме STABILIZING и при ALARM в WORKING.
+// Реле выключено (HIGH) в рабочем режиме без тревоги и в калибровке.
+void updateRelay() {
+  bool relayOn = (state == STABILIZING) ||
+                 (state == WORKING && alarmActive);
+  digitalWrite(RELAY_PIN, relayOn ? HIGH : LOW);
+  Serial.printf("Реле: %s\n", relayOn ? "ВКЛ" : "ВЫКЛ");
 }
 
 // ════════════════════════════════════════════════════════════
